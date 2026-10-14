@@ -1,0 +1,144 @@
+
+#include <Servo.h>
+
+// Arduino pin assignment
+#define PIN_SERVO 10
+#define PIN_TRIG 12
+#define PIN_ECHO 13
+
+// Servo angle
+#define CLOSED_ANGLE 30
+#define OPEN_ANGLE 90
+
+// Distance threshold (cm)
+#define DETECT_DISTANCE 15
+#define RELEASE_DISTANCE 20
+
+Servo myServo;
+
+// Servo movement time
+unsigned long MOVING_TIME = 3000;
+unsigned long moveStartTime = 0;
+unsigned long lastMeasureTime = 0;
+unsigned long absenceStartTime = 0;
+
+int startAngle = CLOSED_ANGLE;
+int stopAngle = CLOSED_ANGLE;
+int currentAngle = CLOSED_ANGLE;
+
+bool gateOpen = false;
+bool waitingToClose = false;
+
+// Ultrasonic distance measurement
+float measureDistance() {
+  digitalWrite(PIN_TRIG, LOW);
+  delayMicroseconds(2);
+
+  digitalWrite(PIN_TRIG, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(PIN_TRIG, LOW);
+
+  unsigned long duration = pulseIn(PIN_ECHO, HIGH, 25000UL);
+
+  if (duration == 0) {
+    return -1;
+  }
+
+  float distance = duration * 0.0346 / 2.0;
+
+  return distance;
+}
+
+// Normalized sigmoid function
+float sigmoid(float t) {
+  float k = 10.0;
+
+  float s = 1.0 / (1.0 + exp(-k * (t - 0.5)));
+  float s0 = 1.0 / (1.0 + exp(k * 0.5));
+  float s1 = 1.0 / (1.0 + exp(-k * 0.5));
+
+  return (s - s0) / (s1 - s0);
+}
+
+// Set servo movement target
+void setGate(bool openGate) {
+  gateOpen = openGate;
+
+  startAngle = currentAngle;
+  stopAngle = gateOpen ? OPEN_ANGLE : CLOSED_ANGLE;
+
+  moveStartTime = millis();
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(PIN_TRIG, OUTPUT);
+  pinMode(PIN_ECHO, INPUT);
+
+  myServo.attach(PIN_SERVO);
+  myServo.write(CLOSED_ANGLE);
+
+  delay(500);
+  moveStartTime = millis();
+}
+
+void loop() {
+  unsigned long currentTime = millis();
+
+  // Measure distance every 100ms
+  if (currentTime - lastMeasureTime >= 100) {
+    lastMeasureTime = currentTime;
+
+    float distance = measureDistance();
+
+    Serial.print("Distance: ");
+    Serial.println(distance);
+
+    // Vehicle detected
+    if (distance >= 0 && distance <= DETECT_DISTANCE) {
+      waitingToClose = false;
+
+      if (!gateOpen) {
+        setGate(true);
+        Serial.println("Gate Opening");
+      }
+    }
+
+    // Vehicle moved away
+    else if (distance < 0 || distance >= RELEASE_DISTANCE) {
+      if (gateOpen) {
+        if (!waitingToClose) {
+          waitingToClose = true;
+          absenceStartTime = millis();
+        }
+        else if (millis() - absenceStartTime >= 1500) {
+          setGate(false);
+          waitingToClose = false;
+          Serial.println("Gate Closing");
+        }
+      }
+    }
+
+    // Maintain current state
+    else {
+      waitingToClose = false;
+    }
+  }
+
+  // Servo control using sigmoid function
+  unsigned long progress = millis() - moveStartTime;
+
+  if (progress <= MOVING_TIME) {
+    float t = (float)progress / MOVING_TIME;
+
+    float smoothProgress = sigmoid(t);
+
+    currentAngle = round(startAngle +
+                   (stopAngle - startAngle) * smoothProgress);
+  } else {
+    currentAngle = stopAngle;
+  }
+
+  myServo.write(currentAngle);
+}
