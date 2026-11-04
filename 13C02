@@ -1,0 +1,77 @@
+
+#include <Servo.h>
+
+#define PIN_SERVO 10
+
+// Servo pulse width
+#define _DUTY_MIN 590
+#define _DUTY_MAX 2410
+
+// Servo control interval (ms)
+#define _INTERVAL_SERVO 20
+#define _INTERVAL_SERIAL 1000
+
+// Challenge settings
+#define _SERVO_SPEED 3.0
+#define _MOVE_ANGLE 180.0
+
+Servo myservo;
+
+unsigned long start_time;
+unsigned long last_servo_time;
+unsigned long last_serial_time;
+
+float angle = 0.0;
+
+void setup() {
+  Serial.begin(57600);
+
+  myservo.attach(PIN_SERVO);
+
+  // Move to starting position
+  myservo.writeMicroseconds(_DUTY_MIN);
+  delay(2000);
+
+  start_time = millis();
+  last_servo_time = start_time;
+  last_serial_time = start_time;
+}
+
+void loop() {
+  unsigned long time_curr = millis();
+
+  // Servo position update
+  if (time_curr - last_servo_time >= _INTERVAL_SERVO) {
+    last_servo_time = time_curr;
+
+    // Calculate elapsed time in seconds
+    float elapsed = (time_curr - start_time) / 1000.0;
+
+    // Calculate target angle
+    angle = _SERVO_SPEED * elapsed;
+
+    // Limit target angle
+    if (angle > _MOVE_ANGLE) {
+      angle = _MOVE_ANGLE;
+    }
+
+    // Convert target angle to pulse width
+    int duty = _DUTY_MIN +
+      (_DUTY_MAX - _DUTY_MIN) * angle / 180.0;
+
+    myservo.writeMicroseconds(duty);
+  }
+
+  // Serial output
+  if (time_curr - last_serial_time >= _INTERVAL_SERIAL) {
+    last_serial_time = time_curr;
+
+    Serial.print("Time: ");
+    Serial.print((time_curr - start_time) / 1000.0);
+
+    Serial.print(" sec, Target angle: ");
+    Serial.print(angle);
+
+    Serial.println(" deg");
+  }
+}
