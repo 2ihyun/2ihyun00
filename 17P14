@@ -1,0 +1,91 @@
+#include <Servo.h>
+
+// Assignment 17P14: IR distance controls servo position.
+#define PIN_IR A0
+#define PIN_LED 9
+#define PIN_SERVO 10
+
+// Previously calibrated pulse widths for this servo (microseconds).
+#define _DUTY_MIN 525
+#define _DUTY_MAX 2670
+#define _DUTY_NEU ((_DUTY_MIN + _DUTY_MAX) / 2)
+
+// AVR attach limits have 4-us resolution. Actual commands are still
+// clamped to the calibrated 525..2670 range below.
+#define SERVO_ATTACH_MIN ((_DUTY_MIN / 4) * 4)
+#define SERVO_ATTACH_MAX (((_DUTY_MAX + 3) / 4) * 4)
+
+#define _DIST_MIN 100.0f  // 10 cm, units: mm
+#define _DIST_MAX 250.0f  // 25 cm, units: mm
+// The assignment formula on PDF p.13 includes -60 mm; the template omits it.
+#define DIST_OFFSET_MM 60.0f
+#define EMA_ALPHA 0.2f   // Starting value; tune after observing the hardware.
+#define LOOP_INTERVAL 30UL  // ms; assignment requires at least 20 ms.
+
+Servo myservo;
+unsigned long last_loop_time = 0;
+float dist_prev = (_DIST_MIN + _DIST_MAX) / 2.0f;
+float dist_ema = (_DIST_MIN + _DIST_MAX) / 2.0f;
+bool has_valid_distance = false;
+
+void setup()
+{
+  pinMode(PIN_LED, OUTPUT);
+  digitalWrite(PIN_LED, LOW);
+  myservo.attach(PIN_SERVO, SERVO_ATTACH_MIN, SERVO_ATTACH_MAX);
+  myservo.writeMicroseconds(_DUTY_NEU);
+  Serial.begin(1000000);
+  last_loop_time = millis();
+}
+
+void loop()
+{
+  unsigned long time_curr = millis();
+  if (time_curr - last_loop_time < LOOP_INTERVAL)
+    return;
+  last_loop_time = time_curr;
+
+  int a_value = analogRead(PIN_IR);
+  // -1 marks an invalid ADC reading in the plot; never use it for control.
+  float dist_raw = -1.0f;
+  if (a_value > 9)
+    dist_raw = (6762.0f / (a_value - 9.0f) - 4.0f) * 10.0f
+               - DIST_OFFSET_MM;
+
+  bool in_range = a_value > 9
+                  && dist_raw >= _DIST_MIN && dist_raw <= _DIST_MAX;
+  digitalWrite(PIN_LED, in_range ? HIGH : LOW);
+
+  // Range filter: reject out-of-range measurements and keep the last
+  // valid target. Until the first valid measurement, stay at neutral.
+  if (in_range) {
+    dist_prev = dist_raw;
+    if (!has_valid_distance) {
+      dist_ema = dist_raw;
+      has_valid_distance = true;
+    }
+  }
+
+  int duty = _DUTY_NEU;
+  if (has_valid_distance) {
+    // With invalid input, EMA may keep settling toward the last valid target.
+    dist_ema = EMA_ALPHA * dist_prev + (1.0f - EMA_ALPHA) * dist_ema;
+
+    // Direct linear interpolation: 100 mm -> 525 us, 250 mm -> 2670 us.
+    float pulse = _DUTY_MIN + (dist_ema - _DIST_MIN)
+                  * (_DUTY_MAX - _DUTY_MIN) / (_DIST_MAX - _DIST_MIN);
+    duty = (int)(pulse + 0.5f);
+    duty = constrain(duty, _DUTY_MIN, _DUTY_MAX);
+  }
+  myservo.writeMicroseconds(duty);
+
+  // Open Serial Plotter at 1,000,000 baud; distances are in mm, servo in us.
+  Serial.print("_DUTY_MIN:"); Serial.print(_DUTY_MIN);
+  Serial.print(",_DIST_MIN:"); Serial.print(_DIST_MIN);
+  Serial.print(",IR:"); Serial.print(a_value);
+  Serial.print(",dist_raw:"); Serial.print(dist_raw);
+  Serial.print(",ema:"); Serial.print(dist_ema);
+  Serial.print(",servo:"); Serial.print(duty);
+  Serial.print(",_DIST_MAX:"); Serial.print(_DIST_MAX);
+  Serial.print(",_DUTY_MAX:"); Serial.println(_DUTY_MAX);
+}
